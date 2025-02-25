@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>networkx与中心性</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        .node {
+            stroke: #fff;
+            stroke-width: 1.5px;
+        }
+
+        .link {
+            stroke: #999;
+            stroke-opacity: 0.6;
+        }
+
+        .node-label {
+            font-size: 10px;
+            text-anchor: middle;
+            fill: #333;
+        }
+
+        button {
+            margin: 5px;
+            padding: 10px;
+            cursor: pointer;
+        }
+
+        .active-button {
+            background-color: #007bff;
+            color: white;
+        }
+
+        .inactive-button {
+            background-color: #e0e0e0;
+            color: black;
+        }
+
+        .button-container {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            flex-direction: column;
+            z-index: 10; /* 确保按钮在画布上方 */
+        }
+
+        svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .zoom-layer {
+            pointer-events: all; /* 允许缩放层接收事件 */
+        }
+    </style>
+</head>
+
+<body>
+<div class="button-container">
+    <button id="degree" class="inactive-button" onclick="updateCentrality('degree')">度中心性</button>
+    <button id="closeness" class="inactive-button" onclick="updateCentrality('closeness')">接近中心性</button>
+    <button id="betweenness" class="inactive-button" onclick="updateCentrality('betweenness')">介数中心性</button>
+</div>
+
+<script>
+    const width = window.innerWidth, height = window.innerHeight; // 画布大小为整个网页
+    const colorScale = d3.scaleSequential(d3.interpolatePlasma).domain([0, 1]); // 颜色映射
+
+    const svg = d3.select("body").append("svg")
+        .attr("width", width)
+        .attr("height", height);
+
+    // 添加缩放层
+    const zoomLayer = svg.append("g")
+        .attr("class", "zoom-layer");
+
+    const simulation = d3.forceSimulation()
+        .force("link", d3.forceLink().id(d => d.id).distance(50))  // 调整节点之间的距离
+        .force("charge", d3.forceManyBody().strength(-100))  // 调整节点之间的斥力，减小节点大小
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collision", d3.forceCollide().radius(30)) // 防止节点重叠，增大半径
+        .alphaDecay(0.05); // 调整alpha衰减
+
+    let graph = { nodes: [], links: [] };
+    let centralityData = { degree: {}, closeness: {}, betweenness: {} };
+
+    // 加载数据并进行处理
+    d3.json("案例数据2.json").then(data => {
+        graph.nodes = data.nodes.map(node => ({ ...node, id: node.name }));
+        graph.links = data.links.map(link => ({
+            source: link.source,
+            target: link.target,
+            relation: link.relation
+        }));
+
+        // 计算中心性
+        calculateCentrality(graph);
+
+        // 绘制图形
+        drawGraph(graph);
+
+        // 添加缩放功能
+        addZoom();
+    });
+
+    function calculateCentrality(graph) {
+        // 度中心性
+        graph.nodes.forEach(node => {
+            centralityData.degree[node.id] = graph.links.filter(
+                link => link.source === node.id || link.target === node.id
+            ).length;
+        });
+
+        // 接近中心性
+        const nodesMap = new Map(graph.nodes.map(node => [node.id, node]));
+        const linksMap = new Map(graph.nodes.map(node => [node.id, []]));
+        graph.links.forEach(link => {
+            linksMap.get(link.source).push(link.target);
+            linksMap.get(link.target).push(link.source);
+        });
+
+        graph.nodes.forEach(node => {
+            const distances = {};
+            const queue = [{ id: node.id, distance: 0 }];
+            while (queue.length > 0) {
+                const current = queue.shift();
+                if (distances[current.id] !== undefined) continue;
+                distances[current.id] = current.distance;
+                linksMap.get(current.id).forEach(neighbor => {
+                    queue.push({ id: neighbor, distance: current.distance + 1 });
+                });
+            }
+            const totalDistance = Object.values(distances).reduce((a, b) => a + b, 0);
+            centralityData.closeness[node.id] = 1 / totalDistance;
+        });
+
+        // 介数中心性（Brandes 算法）
+        const betweenness = new Map(graph.nodes.map(node => [node.id, 0]));
+        graph.nodes.forEach(start => {
+            const stack = [];
+            const paths = new Map(graph.nodes.map(node => [node.id, []]));
+            const distances = new Map(graph.nodes.map(node => [node.id, -1]));
+            const counts = new Map(graph.nodes.map(node => [node.id, 0]));
+
+            distances.set(start.id, 0);
+            counts.set(start.id, 1);
+            let queue = [{ id: start.id, distance: 0 }];
+
+            while (queue.length > 0) {
+                const current = queue.shift();
+                stack.push(current);
+                linksMap.get(current.id).forEach(neighbor => {
+                    if (distances.get(neighbor) === -1) {
+                        queue.push({ id: neighbor, distance: current.distance + 1 });
+                        distances.set(neighbor, current.distance + 1);
+                    }
+                    if (distances.get(neighbor) === current.distance + 1) {
+                        counts.set(neighbor, counts.get(neighbor) + counts.get(current.id));
+                        paths.get(neighbor).push(current.id);
+                    }
+                });
+            }
+
+            const dependency = new Map(graph.nodes.map(node => [node.id, 0]));
+            while (stack.length > 0) {
+                const current = stack.pop();
+                paths.get(current.id).forEach(predecessor => {
+                    dependency.set(
+                        predecessor,
+                        dependency.get(predecessor) +
+                        (counts.get(predecessor) / counts.get(current.id)) *
+                        (1 + dependency.get(current.id))
+                    );
+                });
+                if (current.id !== start.id) {
+                    betweenness.set(
+                        current.id,
+                        betweenness.get(current.id) + dependency.get(current.id)
+                    );
+                }
+            }
+        });
+
+        // 归一化介数中心性
+        const maxBetweenness = Math.max(...betweenness.values());
+        graph.nodes.forEach(node => {
+            centralityData.betweenness[node.id] = betweenness.get(node.id) / maxBetweenness;
+        });
+    }
+
+    function drawGraph(graph) {
+        const link = zoomLayer.append("g")
+            .attr("class", "links")
+            .selectAll("line")
+            .data(graph.links)
+            .enter().append("line")
+            .attr("class", "link");
+
+        const node = zoomLayer.append("g")
+            .attr("class", "nodes")
+            .selectAll("circle")
+            .data(graph.nodes)
+            .enter().append("circle")
+            .attr("class", "node")
+            .attr("r", 5) // 设置节点的大小
+            .call(d3.drag()
+                .on("start", dragstarted)
+                .on("drag", dragged)
+                .on("end", dragended));
+
+        const label = zoomLayer.append("g")
+            .attr("class", "labels")
+            .selectAll("text")
+            .data(graph.nodes)
+            .enter().append("text")
+            .attr("class", "node-label")
+            .text(d => d.id);
+
+        simulation.nodes(graph.nodes).on("tick", ticked);
+        simulation.force("link").links(graph.links);
+
+        function ticked() {
+            link
+                .attr("x1", d => d.source.x)
+                .attr("y1", d => d.source.y)
+                .attr("x2", d => d.target.x)
+                .attr("y2", d => d.target.y);
+
+            node
+                .attr("cx", d => d.x)
+                .attr("cy", d => d.y);
+
+            label
+                .attr("x", d => d.x)
+                .attr("y", d => d.y);
+        }
+
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+    }
+
+    function updateCentrality(type) {
+        const centrality = type === 'degree' ? centralityData.degree :
+            type === 'closeness' ? centralityData.closeness :
+                centralityData.betweenness;
+
+        // 归一化中心性值到 [0, 1]
+        const maxCentrality = Math.max(...Object.values(centrality));
+        const normalizedCentrality = Object.fromEntries(
+            Object.entries(centrality).map(([key, value]) => [key, value / maxCentrality])
+        );
+
+        svg.selectAll(".node")
+            .attr("fill", d => colorScale(normalizedCentrality[d.id]));
+
+        // 更新按钮样式
+        updateButtonStyles(type);
+    }
+
+    function updateButtonStyles(selectedType) {
+        const buttons = document.querySelectorAll('button');
+        buttons.forEach(button => {
+            if (button.id === selectedType) {
+                button.classList.add('active-button');
+                button.classList.remove('inactive-button');
+            } else {
+                button.classList.add('inactive-button');
+                button.classList.remove('active-button');
+            }
+        });
+    }
+
+    function addZoom() {
+        const zoom = d3.zoom()
+            .scaleExtent([0.1, 10]) // 设置缩放范围
+            .on("zoom", (event) => {
+                zoomLayer.attr("transform", event.transform); // 应用缩放和平移
+            });
+
+        svg.call(zoom);
+    }
+</script>
+</body>
+
+</html>

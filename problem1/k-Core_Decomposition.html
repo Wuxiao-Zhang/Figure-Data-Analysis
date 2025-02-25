@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>k-核分解</title>
+    <script src="https://d3js.org/d3.v6.min.js"></script>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        .container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        svg {
+            border: 1px solid black;
+            margin-right: 20px;
+        }
+
+        .button-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        button {
+            margin: 5px;
+        }
+    </style>
+</head>
+
+<body>
+<div class="container">
+    <svg width="800" height="600"></svg>
+    <div class="button-container">
+        <button onclick="highlightK(1)">k=1</button>
+        <button onclick="highlightK(2)">k=2</button>
+        <button onclick="resetHighlight()">clear</button>
+    </div>
+</div>
+
+<script>
+    d3.text("案例数据1.txt").then(function (data) {
+        const matrix = data.trim().split("\n").map(row => row.trim().split(/\s+/).map(Number));
+
+        const nodes = matrix.map((_, i) => ({ id: i, k: 0, removed: false }));
+        const links = [];
+
+        for (let i = 0; i < matrix.length; i++) {
+            for (let j = i + 1; j < matrix[i].length; j++) {
+                if (matrix[i][j] === 1) {
+                    links.push({ source: i, target: j });
+                }
+            }
+        }
+
+        function kCoreDecomposition(nodes, links) {
+            const kValues = new Map(nodes.map(node => [node.id, 0]));
+
+            const adjacencyList = new Map();
+            nodes.forEach(node => adjacencyList.set(node.id, []));
+            links.forEach(link => {
+                adjacencyList.get(link.source).push(link.target);
+                adjacencyList.get(link.target).push(link.source);
+            });
+
+            let k = 1;
+            let remainingNodes = nodes.map(node => node.id);  // 用于跟踪未删除的节点
+
+            while (remainingNodes.length > 0) {
+                let changed;
+                do {
+                    changed = false;
+                    const nodesToRemove = remainingNodes.filter(nodeId =>
+                        adjacencyList.get(nodeId).filter(n => !nodes[n].removed).length < k
+                    );
+
+                    if (nodesToRemove.length > 0) {
+                        changed = true;
+                        nodesToRemove.forEach(nodeId => {
+                            kValues.set(nodeId, k - 1);
+                            nodes[nodeId].removed = true; // 标记为已删除
+                            adjacencyList.get(nodeId).forEach(neighbor => {
+                                adjacencyList.set(neighbor, adjacencyList.get(neighbor).filter(n => n !== nodeId));
+                            });
+                        });
+                        remainingNodes = remainingNodes.filter(id => !nodes[id].removed);
+                    }
+                } while (changed);
+                k++;
+            }
+
+            nodes.forEach(node => node.k = kValues.get(node.id) || (k - 1));
+        }
+
+        // 调用 k-核分解算法
+        kCoreDecomposition(nodes, links);
+
+        const svg = d3.select("svg");
+        const simulation = d3.forceSimulation(nodes)
+            .force("link", d3.forceLink(links).id(d => d.id).distance(100))
+            .force("charge", d3.forceManyBody().strength(-300))
+            .force("center", d3.forceCenter(400, 300));
+
+        const link = svg.selectAll(".link")
+            .data(links)
+            .enter().append("line")
+            .attr("stroke", "#999")
+            .attr("stroke-width", 2);
+
+        const node = svg.selectAll(".node")
+            .data(nodes)
+            .enter().append("circle")
+            .attr("r", 15)
+            .attr("fill", "#69b3a2")
+            .call(d3.drag()
+                .on("start", dragStarted)
+                .on("drag", dragged)
+                .on("end", dragEnded));
+
+        const label = svg.selectAll(".label")
+            .data(nodes)
+            .enter().append("text")
+            .attr("text-anchor", "middle")
+            .attr("dy", 5)
+            .text(d => d.id + 1);
+
+        simulation.on("tick", () => {
+            link.attr("x1", d => d.source.x)
+                .attr("y1", d => d.source.y)
+                .attr("x2", d => d.target.x)
+                .attr("y2", d => d.target.y);
+
+            node.attr("cx", d => d.x)
+                .attr("cy", d => d.y);
+
+            label.attr("x", d => d.x)
+                .attr("y", d => d.y);
+        });
+
+        function dragStarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+
+        function dragEnded(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+
+        window.highlightK = function (kValue) {
+            node.attr("fill", d => d.k === kValue ? "orange" : "#69b3a2");
+        };
+
+        window.resetHighlight = function () {
+            node.attr("fill", "#69b3a2");
+        };
+    });
+</script>
+</body>
+
+</html>
